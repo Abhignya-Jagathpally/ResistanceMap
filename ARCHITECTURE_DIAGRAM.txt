@@ -1,0 +1,343 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                 ResistanceMap Multi-Agent Orchestrator                       ║
+║                                                                              ║
+║              Parallel DAG Execution with Zero-Trust Verification            ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+
+DEPENDENCY GRAPH (DAG)
+═════════════════════════════════════════════════════════════════════════════
+
+Layer 0 (Parallel)
+┌──────────────────┐
+│ DataValidation   │ ← Validates all input files & schemas
+│     Agent        │   (No dependencies, can start immediately)
+└────────┬─────────┘
+         │
+         ▼
+Layer 1 (Sequential)
+┌──────────────────┐
+│   DataPrep       │ ← Harmonizes omics data
+│     Agent        │   (Depends on DataValidation)
+└────────┬─────────┘
+         │
+         ├─────────────────────────────────┬─────────────────────────────────┐
+         ▼                                 ▼
+Layer 2 (Parallel)
+┌──────────────────┐                ┌──────────────────┐
+│  VAEPretrain     │                │   ESM2Embed      │
+│     Agent        │                │     Agent        │
+│ 200 epochs       │                │  Parallel w/VAE  │
+└────────┬─────────┘                └────────┬─────────┘
+         │ (finetune)                        │ (embeddings)
+         ▼                                   │
+Layer 3 (Sequential)                        │
+┌──────────────────┐                        │
+│  VAEFinetune     │ ◄──────────────────────┘
+│     Agent        │
+│  100 epochs      │
+└────────┬─────────┘
+         │
+         ├──────────────────────────────────┬──────────────────────────────┐
+         ▼                                  ▼
+Layer 4 (Parallel)
+┌──────────────────┐                ┌──────────────────┐
+│  Trajectory      │                │  ProteinNet      │
+│     Agent        │                │     Agent        │
+│  ODE Forecasting │                │   GNN Training   │
+│                  │                │  Parallel        │
+└────────┬─────────┘                └────────┬─────────┘
+         └──────────────────┬────────────────┘
+                           ▼
+Layer 5 (Sequential)
+┌──────────────────┐
+│    Fusion        │ ← Cross-modal fusion
+│     Agent        │
+└────────┬─────────┘
+         ▼
+Layer 6 (Sequential)
+┌──────────────────┐
+│   Landscape      │ ← Resistance landscape predictor
+│     Agent        │
+└────────┬─────────┘
+         ▼
+Layer 7 (Sequential)
+┌──────────────────┐
+│  Validation      │ ← Final validation + SOTA comparison
+│     Agent        │
+└──────────────────┘
+
+
+EXECUTION MODEL (Parallelism)
+═════════════════════════════════════════════════════════════════════════════
+
+Sequential (Old Way):
+  [DV] → [DP] → [VP] → [VF] → [ES] (blocked!) → [TR] → [PN] (blocked!) → [FU] → [LA] → [VA]
+   |      |      |      |      |                |      |                |      |      |
+   └──────┴──────┴──────┴──────┴────────────────┴──────┴────────────────┴──────┴──────┘
+   T_total = T_DV + T_DP + T_VP + T_VF + T_ES + T_TR + T_PN + T_FU + T_LA + T_VA
+
+Parallel (New Way with Orchestrator):
+  Time ▶
+  ┌────┴────┐
+  │    DV   │
+  └────┬────┘
+       ├─────┴─────┐
+       │     DP    │
+       ├──┬──────────────┐
+       │  │   VP  │ ES   │  ← Layer 2: VP and ES run in parallel (2x speedup)
+       │  │       │      │
+       │  │   VF  │      │
+       │  ├──┬────────────┤
+       │  │  │TR│  PN     │  ← Layer 4: TR and PN run in parallel (2x speedup)
+       │  │  │  │         │
+       │  └──┴──┴────┬────┘
+       │        FU   │
+       │        LA   │
+       │        VA   │
+  ────┴────────────────
+       T_total ≈ 0.75 × T_sequential
+       Speedup = 1.33x - 4x depending on duration distribution
+
+
+ZERO-TRUST VERIFICATION FLOW
+═════════════════════════════════════════════════════════════════════════════
+
+Agent Execution → Hash Computation → Verification → Audit Trail
+
+┌──────────────────────────────┐
+│  Agent 1 Executes            │
+│  result = await execute()    │
+└──────────────┬───────────────┘
+               ▼
+┌──────────────────────────────┐
+│  Compute Hash                │
+│  hash = SHA256(result.output)│
+└──────────────┬───────────────┘
+               ▼
+┌──────────────────────────────┐
+│  Verify Integrity            │
+│  hash == result.hash? ✓       │
+└──────────────┬───────────────┘
+               ▼
+┌──────────────────────────────┐
+│  Record in Chain             │
+│  chain.append(hash)          │
+└──────────────┬───────────────┘
+               ▼
+┌──────────────────────────────┐
+│  Pass to Dependents          │
+│  if dependent:               │
+│    verify_output(result) ✓   │
+│    inputs[dep_name] = output │
+└──────────────────────────────┘
+
+Verification Chain (Audit Trail):
+  ["8f2a1c3d...", "c9e3b5f2...", "1a4d7e9c...", "5c8e2b7f...", ...]
+         ▲              ▲              ▲              ▲
+      Layer 0       Layer 1       Layer 2       Layer 2
+       DV Agent     DP Agent     VP Agent      ES Agent
+
+
+AGENT ARCHITECTURE
+═════════════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────┐
+│                        BaseAgent                            │
+├─────────────────────────────────────────────────────────────┤
+│ Properties:                                                 │
+│  • name: str                                                │
+│  • dependencies: List[str]                                  │
+│                                                             │
+│ Abstract Methods:                                           │
+│  • execute(inputs, config) → AgentResult                    │
+│                                                             │
+│ Verification Methods:                                       │
+│  • verify_inputs(inputs) → (bool, str)                      │
+│  • verify_output(result) → (bool, str)                      │
+│  • compute_hash(data) → str  [Static]                       │
+│                                                             │
+│ Helper Methods:                                             │
+│  • _make_result(status, output, error, metadata)            │
+│  • _safe_execute(inputs, config)  [wrapper]                 │
+└─────────────────────────────────────────────────────────────┘
+         △                    △                    △
+         │                    │                    │
+         ├────────────────────┼────────────────────┤
+         │                    │                    │
+      ┌──┴──┐         ┌───────┴────┐         ┌────┴──┐
+      │Data │         │   VAE      │         │Protein│
+      │Valid│         │  Pretrain  │         │  Net  │
+      └─────┘         └────────────┘         └───────┘
+   (and 7 others...)
+
+
+ORCHESTRATOR ENGINE
+═════════════════════════════════════════════════════════════════════════════
+
+┌────────────────────────────────────────────────────────────┐
+│                      Orchestrator                          │
+├────────────────────────────────────────────────────────────┤
+│ State:                                                     │
+│  • dag: AgentDAG                (dependency graph)         │
+│  • results: Dict[name→Result]   (execution results)        │
+│  • execution_plan: ExecutionPlan (layer schedule)          │
+│  • _verification_chain: List[str] (audit trail)            │
+│  • _timing_log: Dict[timing]    (performance data)         │
+│                                                            │
+│ Workflow:                                                  │
+│  1. add_agent(agent) - Register agents                     │
+│  2. prepare_execution() - Validate DAG, create plan        │
+│  3. run(config) - Execute all layers with parallelism     │
+│  4. get_execution_plan() - View layers                     │
+│  5. get_verification_chain() - Audit trail                 │
+│  6. get_timing_report() - Performance metrics              │
+│  7. get_results_summary() - Status counts                  │
+└────────────────────────────────────────────────────────────┘
+
+
+EXECUTION SEQUENCE DIAGRAM
+═════════════════════════════════════════════════════════════════════════════
+
+User              Orchestrator         AgentDAG         Agents          Results
+ │                    │                   │              │               │
+ │  create()          │                   │              │               │
+ ├───────────────────►│                   │              │               │
+ │                    │  add_agent()      │              │               │
+ │  add_agent(A)      ├───────────────────►              │               │
+ ├───────────────────►│                   │              │               │
+ │                    │  add_agent(B)     │              │               │
+ │  add_agent(B)      ├───────────────────►              │               │
+ ├───────────────────►│                   │              │               │
+ │                    │  topological_sort()              │               │
+ │  prepare_execution()├──────────────────►              │               │
+ ├───────────────────►│ (Kahn's algorithm)              │               │
+ │  ◄─────────────────┤◄──────────────────┤              │               │
+ │  (execution_plan)  │ [plan]             │              │               │
+ │                    │                   │              │               │
+ │  run(config)       │ Layer 0: asyncio.gather()        │               │
+ ├───────────────────►│                   │              │               │
+ │                    │────────────────────────────────►A │               │
+ │                    │────────────────────────────────►B │               │
+ │                    │                   │              │◄──────────────┤
+ │                    │                   │              │  result_A     │
+ │                    │                   │              │◄──────────────┤
+ │                    │                   │              │  result_B     │
+ │                    │ Layer 1: asyncio.gather()        │               │
+ │                    │─────────────────────────────────►C │               │
+ │                    │                   │              │◄──────────────┤
+ │                    │                   │              │  result_C     │
+ │  ◄─────────────────┤ (all layers complete)           │               │
+ │  results dict      │                   │              │               │
+ │  verification_chain│                   │              │               │
+
+
+ZERO-TRUST DATA FLOW
+═════════════════════════════════════════════════════════════════════════════
+
+Agent A Output:
+  ┌─────────────────────────┐
+  │ {data: "value"}         │
+  └────────┬────────────────┘
+           │
+           ▼ (compute_hash)
+  ┌─────────────────────────┐
+  │ hash = SHA256(output)   │
+  │ = "8f2a1c3d..."        │
+  └────────┬────────────────┘
+           │
+           ▼ (verify)
+  ┌─────────────────────────┐
+  │ hash == result.hash?    │
+  │ "8f2a1c3d" == "8f2a..."│
+  │ ✓ PASSED                │
+  └────────┬────────────────┘
+           │
+           ▼ (record)
+  verification_chain.append("8f2a1c3d...")
+           │
+           ▼ (pass to dependent)
+  Agent B Input:
+  ┌─────────────────────────┐
+  │ {"A": {data: "value"}}  │
+  │        (verified! ✓)    │
+  └─────────────────────────┘
+
+
+ERROR HANDLING
+═════════════════════════════════════════════════════════════════════════════
+
+Agent Execution:
+  ┌──────────────────┐
+  │   execute()      │
+  │   fails ✗        │
+  └────────┬─────────┘
+           │
+           ▼
+  ┌──────────────────┐
+  │ status = FAILED  │
+  │ error = "..."    │
+  └────────┬─────────┘
+           │
+           ▼
+  Dependent Agent:
+  ┌──────────────────┐
+  │ Checks status    │
+  │ != COMPLETED ✗   │
+  └────────┬─────────┘
+           │
+           ▼
+  ┌──────────────────┐
+  │ Returns FAILED   │
+  │ with error msg   │
+  └────────┬─────────┘
+           │
+           ▼
+  Orchestrator:
+  ┌──────────────────┐
+  │ Continues other  │
+  │ branches         │
+  │ (no interruption)│
+  └──────────────────┘
+  Final summary shows failed agents
+
+
+MEMORY LAYOUT
+═════════════════════════════════════════════════════════════════════════════
+
+Orchestrator Instance:
+┌─────────────────────────────────┐
+│ dag: AgentDAG                   │
+│  ├─ agents: Dict               │
+│  │  ├─ "agent1": BaseAgent    │
+│  │  ├─ "agent2": BaseAgent    │
+│  │  └─ "agent10": BaseAgent   │
+│  └─ edges: Dict                │
+│     ├─ "agent1": []            │
+│     ├─ "agent2": ["agent1"]    │
+│     └─ "agent10": [...deps...]  │
+│                                 │
+│ results: Dict[name → Result]   │
+│  ├─ "agent1": AgentResult      │
+│  │  ├─ agent_name: str         │
+│  │  ├─ status: COMPLETED       │
+│  │  ├─ output: {dict}          │
+│  │  ├─ verification_hash: str  │
+│  │  ├─ metadata: Dict          │
+│  │  └─ error: None             │
+│  └─ "agent2": AgentResult      │
+│                                 │
+│ execution_plan: ExecutionPlan  │
+│  ├─ layers: [[ag1], [ag2,...]] │
+│  └─ agent_order: [ag1, ag2,...]│
+│                                 │
+│ _verification_chain: List[str] │
+│  └─ ["8f2a1c3d", "c9e3b5f2"...]│
+│                                 │
+│ _timing_log: Dict[timing]      │
+│  └─ "agent1": {start, end}     │
+└─────────────────────────────────┘
+
+Memory Complexity: O(n + e)
+  where n = number of agents
+        e = number of dependencies

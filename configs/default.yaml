@@ -1,0 +1,271 @@
+# ResistanceMap — default configuration
+# All hyperparameters, data paths, and hardware settings.
+# Values match ResistanceMapConfig dataclass defaults.
+
+# Data paths and preprocessing parameters
+data:
+  # Raw data directories (relative to project root)
+  ccle_proteomics_path: data/raw/ccle_proteomics.csv
+  ccle_epigenomics_dir: data/raw/ccle_epigenomics/
+  string_ppi_path: data/raw/string_ppi.txt
+  gdsc_path: data/raw/gdsc_drug_sensitivity.csv
+  ctrpv2_path: data/raw/ctrpv2_drug_sensitivity.csv
+
+  # Single-cell and patient data
+  scrna_gse124310_path: data/raw/gse124310.h5ad  # MM patient samples
+  scrna_gse271107_path: data/raw/gse271107.h5ad  # Lenalidomide response
+  mmrf_commpass_dir: data/raw/mmrf_commpass/     # Clinical + genomic data
+
+  # Preprocessing parameters
+  min_coverage: 0.7      # Drop proteins missing in >30% of samples
+  imputation: knn        # knn | median | zero
+  normalization: quantile  # quantile | zscore | log2
+  ppi_confidence: 0.7    # STRING combined score cutoff
+
+  # Single-cell QC thresholds
+  scrna_min_genes: 200
+  scrna_max_genes: 8000
+  scrna_min_counts: 1000
+  scrna_max_mt: 0.2      # Max mitochondrial percentage
+
+  # Train/val/test split
+  test_fraction: 0.15
+  val_fraction: 0.15
+  random_seed: 42
+
+  # Drug targets for trajectory modeling
+  target_drugs:
+    - Bortezomib
+    - Lenalidomide
+    - Dexamethasone
+    - Carfilzomib
+    - Pomalidomide
+    - Daratumumab
+
+# Proteome-to-Epigenome Conditional VAE
+vae:
+  # Architecture
+  input_dim: 8000        # Number of proteins
+  epigenome_dim: 50000   # Number of ATAC-seq peaks
+  latent_dim: 64         # Resistance state embedding
+  encoder_hidden_dims: [2048, 1024, 512]
+  decoder_hidden_dims: [512, 1024, 2048]
+  dropout: 0.1
+  use_batch_norm: true
+  activation: gelu
+
+  # Training
+  pretrain_epochs: 200
+  finetune_epochs: 100
+  pretrain_lr: 1e-3
+  finetune_lr: 1e-4
+  weight_decay: 1e-5
+  batch_size: 512
+  gradient_clip_norm: 1.0
+
+  # KL annealing (cyclical)
+  kl_anneal_cycles: 4
+  kl_anneal_ratio: 0.5
+  kl_weight_max: 1.0
+
+  # Reconstruction loss weights
+  atac_weight: 1.0
+  h3k4me3_weight: 0.5
+  h3k27me3_weight: 0.5
+
+  # Gradient checkpointing
+  gradient_checkpointing: true
+
+  # Early stopping
+  patience: 20
+  min_delta: 1e-4
+
+# ODE-based resistance trajectory modeling
+trajectory:
+  # ODE solver
+  ode_solver: euler     # euler | dopri5 | rk4
+  ode_rtol: 1e-5
+  ode_atol: 1e-7
+  integration_time: 100.0  # Arbitrary time units
+
+  # Forecasting horizons
+  forecast_horizons: [3, 6, 12]  # months
+
+  # Monte Carlo sampling for uncertainty quantification
+  n_perturbation: 50    # Samples for trajectory uncertainty
+
+  # Calibration
+  calibration_lr: 1e-3
+  calibration_epochs: 500
+  calibration_batch_size: 64
+
+  # Output range
+  score_range: [0.0, 1.0]
+
+# Protein network with ESM-2 embeddings
+protein_net:
+  # ESM-2 language model
+  esm2_model: facebook/esm2_t33_650M_UR50D
+  esm2_dim: 1280         # ESM2-T33 output dimension
+
+  # Graph neural network
+  gnn_hidden: 256
+  gnn_layers: 4
+  gnn_heads: 8           # Multi-head attention
+  gnn_dropout: 0.2
+  gnn_conv_type: gat     # gat | gcn | graphsage
+
+  # PPI graph statistics
+  ppi_proteins: 7853     # Typical STRING human network size
+  ppi_edges: 460000      # Typical edge count
+
+# Multi-modal fusion
+fusion:
+  # Cross-attention fusion
+  hidden_dim: 128
+  n_heads: 4
+  dropout: 0.2
+  fusion_type: cross_attention  # cross_attention | concat | gated
+
+  # Training
+  fusion_lr: 5e-4
+  fusion_epochs: 150
+  weight_decay: 1e-4
+
+# Resistance landscape visualization
+landscape:
+  # Top resistance mechanism identification
+  n_top_targets: 20
+  confidence_threshold: 0.8
+
+  # Visualization
+  visualization: true
+  umap_n_neighbors: 15
+  umap_min_dist: 0.1
+
+# Hardware and distributed training settings
+hardware:
+  device: cuda
+  dtype: bfloat16       # bfloat16 | float16 | float32
+  compile: true         # torch.compile
+  compile_mode: reduce-overhead  # default | reduce-overhead | max-autotune
+  pin_memory: true
+  num_workers: 8        # DataLoader workers
+  prefetch_factor: 4
+
+  # Distributed training
+  distributed: false
+  local_rank: 0
+  world_size: 1
+
+  # Reproducibility
+  deterministic: false
+  seed: 42
+
+# Top-level settings
+checkpoint_dir: checkpoints
+log_dir: logs
+wandb_project: resistancemap
+
+# ─── Agentic Pipeline Settings ───────────────────────────────────────
+
+# AgentOps: Observability, Evaluation, Optimization
+agentops:
+  enabled: true
+  trace_dir: logs/traces
+  export_format: json        # json | otlp
+  # Observability thresholds
+  max_handoff_latency_ms: 5000
+  cost_budget_per_run: 50.0  # USD
+  # Evaluation thresholds
+  min_task_completion_rate: 0.95
+  max_guardrail_violation_rate: 0.01
+  min_factual_accuracy: 0.90
+  min_clinical_appropriateness: 0.95
+  min_first_pass_approval: 0.85
+  # Optimization targets
+  target_token_efficiency: 0.80
+  target_retrieval_precision_at_k: 0.75
+  target_handoff_success_rate: 0.95
+
+# Zero-Trust Verification
+verification:
+  enabled: true
+  hash_algorithm: sha256
+  # Statistical validation
+  ks_test_alpha: 0.05        # Kolmogorov-Smirnov significance
+  distribution_check: true
+  # Biological constraints
+  check_protein_range: true
+  check_ic50_range: true
+  max_ic50_um: 1000.0        # Physiological upper bound (µM)
+  check_transition_stochastic: true
+  # Audit trail
+  audit_log_path: logs/verification_audit.json
+
+# Data Quality Profiling
+data_quality:
+  enabled: true
+  # SOTA benchmark references
+  mmrf_commpass_c_index: 0.72     # DeepSurv baseline
+  ccle_n_proteins: 8498           # Expected protein coverage
+  gdsc_ic50_r2: 0.84             # DeepCDR baseline
+  string_ppi_proteins: 19566     # STRING v12 human
+  # MM driver proteins to check
+  mm_driver_proteins:
+    - BCMA
+    - CD38
+    - GPRC5D
+    - ADRM1
+    - FGFR3
+    - KRAS
+    - NRAS
+    - TP53
+    - DIS3
+    - FAM46C
+    - IRF4
+    - CRBN
+    - IKZF1
+  min_driver_coverage: 0.8
+
+# MCP Integration
+mcp:
+  enabled: false               # Enable for literature/drug enrichment
+  # In-house MCPs (preprocessing, models, verification)
+  in_house:
+    preprocessing: true
+    model_serving: true
+    verification: true
+  # Open-source MCP connectors
+  pubmed:
+    enabled: false
+    rate_limit_per_sec: 3
+    max_results: 100
+  chembl:
+    enabled: false
+    rate_limit_per_sec: 5
+    cache_ttl_hours: 24
+  clinical_trials:
+    enabled: false
+    rate_limit_per_sec: 5
+  huggingface:
+    enabled: false
+    rate_limit_per_sec: 10
+
+# Latent Compute Scheduling
+latent_compute:
+  enabled: true
+  gpu_memory_budget_gb: 24.0     # Per-GPU memory budget
+  max_concurrent_tasks: 2
+  # Pre-configured expensive operations
+  esm2_embedding:
+    memory_gb: 20.0
+    n_proteins: 7853
+    priority: high
+  ppi_gnn_training:
+    memory_gb: 10.0
+    priority: medium
+  trajectory_ensemble:
+    memory_gb: 14.0
+    n_samples: 1000
+    priority: medium

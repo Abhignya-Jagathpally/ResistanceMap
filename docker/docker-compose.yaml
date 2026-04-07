@@ -1,0 +1,154 @@
+# ResistanceMap — Docker Compose orchestration
+# Services:
+#   - resistancemap-train: Training pipeline with GPU support
+#   - resistancemap-api: FastAPI inference server
+#   - mlflow (optional): Experiment tracking and model registry
+
+version: "3.9"
+
+services:
+  # ========================================================================
+  # Training Service — GPU-enabled pipeline execution
+  # ========================================================================
+  resistancemap-train:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: resistancemap-train
+    image: resistancemap:latest
+    shm_size: "16gb"  # Increase shared memory for DataLoader workers
+    environment:
+      - CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7  # All available GPUs
+      - WANDB_PROJECT=resistancemap
+      - WANDB_ENTITY=${WANDB_ENTITY:-}
+      - WANDB_API_KEY=${WANDB_API_KEY:-}
+    volumes:
+      - ./data:/app/data:rw          # Training data
+      - ./checkpoints:/app/checkpoints:rw  # Model checkpoints
+      - ./logs:/app/logs:rw           # Training logs
+      - /dev/shm:/dev/shm            # Shared memory for IPC
+    devices:
+      - /dev/nvidia0:/dev/nvidia0  # GPU 0
+      - /dev/nvidia1:/dev/nvidia1  # GPU 1
+      - /dev/nvidia2:/dev/nvidia2  # GPU 2
+      - /dev/nvidia3:/dev/nvidia3  # GPU 3
+      - /dev/nvidia4:/dev/nvidia4  # GPU 4
+      - /dev/nvidia5:/dev/nvidia5  # GPU 5
+      - /dev/nvidia6:/dev/nvidia6  # GPU 6
+      - /dev/nvidia7:/dev/nvidia7  # GPU 7
+      - /dev/nvidiactl:/dev/nvidiactl
+      - /dev/nvidia-uvm:/dev/nvidia-uvm
+    runtime: nvidia
+    command: >
+      python main.py
+      --config configs/h100.yaml
+
+  # ========================================================================
+  # API Service — FastAPI inference server
+  # ========================================================================
+  resistancemap-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: resistancemap-api
+    image: resistancemap:latest
+    environment:
+      - CUDA_VISIBLE_DEVICES=0,1
+      - WANDB_PROJECT=resistancemap
+    volumes:
+      - ./checkpoints:/app/checkpoints:ro  # Read-only access to checkpoints
+      - ./logs:/app/logs:rw
+    devices:
+      - /dev/nvidia0:/dev/nvidia0
+      - /dev/nvidia1:/dev/nvidia1
+      - /dev/nvidiactl:/dev/nvidiactl
+      - /dev/nvidia-uvm:/dev/nvidia-uvm
+    runtime: nvidia
+    ports:
+      - "8000:8000"  # FastAPI server
+      - "6006:6006"  # TensorBoard (if enabled)
+    depends_on:
+      - resistancemap-train
+    command: >
+      python main.py
+      --config configs/h100.yaml
+      --stage serve
+      --port 8000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ========================================================================
+  # MLflow Service — Experiment tracking and model registry (optional)
+  # ========================================================================
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:latest
+    container_name: resistancemap-mlflow
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mlruns:/mlflow
+      - ./artifacts:/artifacts
+    command: >
+      mlflow server
+      --backend-store-uri sqlite:////mlflow/mlflow.db
+      --default-artifact-root /artifacts
+      --host 0.0.0.0
+      --port 5000
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    profiles:
+      - mlflow  # Enable with: docker-compose --profile mlflow up
+
+  # ========================================================================
+  # Jupyter Service — Interactive development and exploration (optional)
+  # ========================================================================
+  jupyter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: resistancemap-jupyter
+    image: resistancemap:latest
+    environment:
+      - CUDA_VISIBLE_DEVICES=0,1
+    volumes:
+      - ./data:/app/data:rw
+      - ./checkpoints:/app/checkpoints:rw
+      - ./logs:/app/logs:rw
+      - ./notebooks:/app/notebooks:rw
+    devices:
+      - /dev/nvidia0:/dev/nvidia0
+      - /dev/nvidia1:/dev/nvidia1
+      - /dev/nvidiactl:/dev/nvidiactl
+      - /dev/nvidia-uvm:/dev/nvidia-uvm
+    runtime: nvidia
+    ports:
+      - "8888:8888"
+    command: >
+      jupyter notebook
+      --ip=0.0.0.0
+      --port=8888
+      --no-browser
+      --allow-root
+      --NotebookApp.token=''
+      --NotebookApp.password=''
+    profiles:
+      - jupyter  # Enable with: docker-compose --profile jupyter up
+
+# ============================================================================
+# Network and volumes
+# ============================================================================
+networks:
+  default:
+    name: resistancemap-network
+    driver: bridge
+
+volumes:
+  data:
+  checkpoints:
+  logs:
+  mlruns:
+  artifacts:

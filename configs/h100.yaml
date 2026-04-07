@@ -1,0 +1,117 @@
+# ResistanceMap — H100 GPU optimized configuration
+# High-performance settings for training on NVIDIA H100 GPUs.
+# Overrides defaults from configs/default.yaml where specified.
+
+# Data settings
+data:
+  ccle_proteomics_path: data/raw/ccle_proteomics.csv
+  ccle_epigenomics_dir: data/raw/ccle_epigenomics/
+  string_ppi_path: data/raw/string_ppi.txt
+  gdsc_path: data/raw/gdsc_drug_sensitivity.csv
+  ctrpv2_path: data/raw/ctrpv2_drug_sensitivity.csv
+  scrna_gse124310_path: data/raw/gse124310.h5ad
+  scrna_gse271107_path: data/raw/gse271107.h5ad
+  mmrf_commpass_dir: data/raw/mmrf_commpass/
+
+# VAE — larger batch size, gradient checkpointing
+vae:
+  input_dim: 8000
+  epigenome_dim: 50000
+  latent_dim: 64
+  encoder_hidden_dims: [2048, 1024, 512]
+  decoder_hidden_dims: [512, 1024, 2048]
+  dropout: 0.1
+  use_batch_norm: true
+  activation: gelu
+
+  # H100 can handle larger batches
+  pretrain_epochs: 200
+  finetune_epochs: 100
+  pretrain_lr: 1e-3
+  finetune_lr: 1e-4
+  weight_decay: 1e-5
+  batch_size: 1024     # Doubled from default 512
+  gradient_clip_norm: 1.0
+
+  kl_anneal_cycles: 4
+  kl_anneal_ratio: 0.5
+  kl_weight_max: 1.0
+
+  atac_weight: 1.0
+  h3k4me3_weight: 0.5
+  h3k27me3_weight: 0.5
+
+  gradient_checkpointing: true  # Save memory
+
+  patience: 20
+  min_delta: 1e-4
+
+# Trajectory
+trajectory:
+  ode_solver: dopri5    # Higher accuracy solver for H100
+  ode_rtol: 1e-6
+  ode_atol: 1e-8
+  integration_time: 100.0
+
+  forecast_horizons: [3, 6, 12]
+  n_perturbation: 100   # More samples on powerful GPU
+
+  calibration_lr: 1e-3
+  calibration_epochs: 500
+  calibration_batch_size: 128  # Larger batch
+  score_range: [0.0, 1.0]
+
+# Protein network — faster GNN
+protein_net:
+  esm2_model: facebook/esm2_t33_650M_UR50D
+  esm2_dim: 1280
+
+  gnn_hidden: 512       # Doubled for more capacity
+  gnn_layers: 4
+  gnn_heads: 8
+  gnn_dropout: 0.2
+  gnn_conv_type: gat
+
+  ppi_proteins: 7853
+  ppi_edges: 460000
+
+# Fusion
+fusion:
+  hidden_dim: 256       # Increased from 128
+  n_heads: 8            # Doubled from 4
+  dropout: 0.2
+  fusion_type: cross_attention
+
+  fusion_lr: 5e-4
+  fusion_epochs: 150
+  weight_decay: 1e-4
+
+# Landscape
+landscape:
+  n_top_targets: 20
+  confidence_threshold: 0.8
+  visualization: true
+  umap_n_neighbors: 15
+  umap_min_dist: 0.1
+
+# Hardware — H100 optimizations
+hardware:
+  device: cuda
+  dtype: bfloat16             # Native H100 support
+  compile: true               # torch.compile for speed
+  compile_mode: reduce-overhead  # Lower latency
+  pin_memory: true
+  num_workers: 16             # More DataLoader workers
+  prefetch_factor: 4
+
+  distributed: false
+  local_rank: 0
+  world_size: 1
+
+  deterministic: false        # Disable for speed
+  seed: 42
+
+# Top-level settings
+checkpoint_dir: checkpoints
+log_dir: logs
+wandb_project: resistancemap
