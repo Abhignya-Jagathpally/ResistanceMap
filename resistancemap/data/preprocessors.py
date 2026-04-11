@@ -279,7 +279,9 @@ def harmonize_omics(
     proteomics: dict[str, Any],
     epigenomics: dict[str, Any],
     ppi_graph: dict[str, Any],
-    config: DataConfig,
+    scrna_data: dict[str, Any] | None = None,
+    mmrf_data: dict[str, Any] | None = None,
+    config: DataConfig = None,
 ) -> MultiOmicsDataset:
     """Harmonize proteomics, epigenomics, and drug sensitivity into a single dataset.
 
@@ -296,12 +298,18 @@ def harmonize_omics(
         proteomics: Output of load_ccle_proteomics().
         epigenomics: Output of load_ccle_epigenomics().
         ppi_graph: Output of load_string_ppi().
+        scrna_data: Optional dict of scRNA-seq datasets.
+        mmrf_data: Optional dict of MMRF data.
         config: Data configuration.
 
     Returns:
         MultiOmicsDataset with matched, preprocessed tensors.
     """
     logger.info("Harmonizing multi-omics data")
+    if scrna_data:
+        logger.info(f"  Additional scRNA-seq datasets: {list(scrna_data.keys())}")
+    if mmrf_data:
+        logger.info(f"  Additional MMRF data: {list(mmrf_data.keys())}")
 
     prot_df = proteomics["data"]
     prot_ids = set(proteomics["sample_ids"])
