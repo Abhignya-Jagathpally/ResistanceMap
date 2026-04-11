@@ -92,7 +92,7 @@ class AgentDAG:
             # Decrement in_degree for agents that depend on ready agents
             for ready_agent in ready:
                 for other_agent, deps in self.edges.items():
-                    if other_agent in deps:
+                    if ready_agent in deps:
                         in_degree[other_agent] -= 1
 
         return layers
