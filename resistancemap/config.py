@@ -171,6 +171,15 @@ class LandscapeConfig:
 
 
 @dataclass
+class APIConfig:
+    """API server configuration."""
+
+    port: int = 8000
+    workers: int = 4
+    host: str = "0.0.0.0"
+
+
+@dataclass
 class HardwareConfig:
     """GPU and distributed training settings."""
 
@@ -202,6 +211,7 @@ class ResistanceMapConfig:
     protein_net: ProteinNetConfig = field(default_factory=ProteinNetConfig)
     fusion: FusionConfig = field(default_factory=FusionConfig)
     landscape: LandscapeConfig = field(default_factory=LandscapeConfig)
+    api: APIConfig = field(default_factory=APIConfig)
     hardware: HardwareConfig = field(default_factory=HardwareConfig)
 
     checkpoint_dir: Path = Path("checkpoints")
@@ -255,6 +265,7 @@ def load_config(path: Path) -> ResistanceMapConfig:
         "protein_net": (config.protein_net, ProteinNetConfig),
         "fusion": (config.fusion, FusionConfig),
         "landscape": (config.landscape, LandscapeConfig),
+        "api": (config.api, APIConfig),
         "hardware": (config.hardware, HardwareConfig),
     }
 
