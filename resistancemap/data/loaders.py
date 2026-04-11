@@ -407,3 +407,70 @@ def _standardize_drug_columns(df: pd.DataFrame, source_name: str) -> pd.DataFram
 
     logger.info(f"  {source_name}: standardized columns")
     return df
+
+
+def load_scrna_data(config: DataConfig) -> dict[str, Any]:
+    """Load all available scRNA-seq datasets.
+
+    Loads GSE124310 (MM patient samples) and GSE271107 (lenalidomide response)
+    if their files exist. Returns empty dict if neither is found.
+
+    Args:
+        config: DataConfig with scRNA-seq paths.
+
+    Returns:
+        Dict with loaded AnnData objects keyed by accession.
+    """
+    result = {}
+
+    for name, path in [
+        ("GSE124310", config.scrna_gse124310_path),
+        ("GSE271107", config.scrna_gse271107_path),
+    ]:
+        if path.exists():
+            data = load_scrna_h5ad(path, config)
+            result[name] = data
+            logger.info(f"Loaded scRNA-seq {name}: {data['adata'].n_obs} cells")
+        else:
+            logger.warning(f"scRNA-seq {name} not found at {path}, skipping")
+
+    return result
+
+
+def load_mmrf_data(config: DataConfig) -> dict[str, Any]:
+    """Load MMRF CoMMpass clinical and genomic data.
+
+    Looks for clinical.txt and gene_expression.tsv in the CoMMpass directory.
+    Returns empty dict if directory doesn't exist or is empty.
+
+    Args:
+        config: DataConfig with MMRF CoMMpass directory path.
+
+    Returns:
+        Dict with clinical and expression data.
+    """
+    mmrf_dir = config.mmrf_commpass_dir
+    result = {}
+
+    if not mmrf_dir.exists():
+        logger.warning(f"MMRF CoMMpass directory not found at {mmrf_dir}, skipping")
+        return result
+
+    # Clinical data
+    clinical_path = mmrf_dir / "clinical.txt"
+    if clinical_path.exists():
+        df = pd.read_csv(clinical_path, sep="\t", low_memory=False)
+        result["clinical"] = df
+        logger.info(f"Loaded MMRF clinical: {len(df)} patients")
+
+    # Gene expression
+    expr_path = mmrf_dir / "gene_expression.tsv"
+    if expr_path.exists():
+        df = pd.read_csv(expr_path, sep="\t", index_col=0, low_memory=False)
+        result["expression"] = df
+        logger.info(f"Loaded MMRF expression: {df.shape}")
+
+    if not result:
+        logger.warning(f"No MMRF data files found in {mmrf_dir}")
+
+    return result
