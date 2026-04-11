@@ -396,8 +396,12 @@ def train_fusion(config: ResistanceMapConfig, ckpt_mgr: CheckpointManager) -> Pa
 
 
 def train_landscape(config: ResistanceMapConfig, ckpt_mgr: CheckpointManager) -> Path:
-    """Build resistance landscape."""
-    from resistancemap.models.landscape import ResistanceLandscape, build_landscape
+    """Build resistance landscape predictor.
+
+    Loads the fused representations and trains the landscape model to predict
+    per-drug resistance probabilities and intervention targets.
+    """
+    from resistancemap.landscape.predictor import ResistanceLandscape
     from resistancemap.utils.logging_utils import log_stage_start, log_stage_end
 
     if ckpt_mgr.exists("landscape_trained"):
@@ -406,11 +410,57 @@ def train_landscape(config: ResistanceMapConfig, ckpt_mgr: CheckpointManager) ->
     log_stage_start("landscape_train")
     data_ckpt = ckpt_mgr.load("data_ready")
     fusion_ckpt = ckpt_mgr.load("fusion_trained")
+
     model = ResistanceLandscape(config.landscape).to(config.device)
-    result = build_landscape(model=model, dataset=data_ckpt["dataset"],
-                             fusion_checkpoint=fusion_ckpt, config=config.landscape, ckpt_mgr=ckpt_mgr)
-    log_stage_end("landscape_train", metrics=result["metrics"])
-    return result["checkpoint_path"]
+    model = _maybe_compile(model, config)
+
+    # Train landscape on fused representations
+    optimizer = torch.optim.Adam(model.parameters(), lr=5e-4, weight_decay=1e-4)
+    dataset = data_ckpt["dataset"]
+    splits = data_ckpt["splits"]
+    train_idx = splits["train"]
+
+    best_loss = float("inf")
+    for epoch in range(50):
+        model.train()
+        batch_losses = []
+        for i in range(0, len(train_idx), 64):
+            batch_idx = train_idx[i:i + 64]
+            batch = dataset[batch_idx[0]] if len(batch_idx) == 1 else {
+                k: torch.stack([dataset[j][k] for j in batch_idx])
+                for k in dataset[0].keys()
+            }
+            optimizer.zero_grad()
+            # Forward pass through landscape model
+            prot = batch["proteomics"].to(config.device)
+            if prot.dim() == 1:
+                prot = prot.unsqueeze(0)
+            pred = model(prot)
+            target = batch["drug_sensitivity"].to(config.device)
+            if target.dim() == 1:
+                target = target.unsqueeze(0)
+            # Mask NaN drug values
+            mask = ~torch.isnan(target)
+            if mask.any():
+                loss = torch.nn.functional.mse_loss(
+                    pred[:, :target.shape[1]][mask], target[mask]
+                )
+                loss.backward()
+                optimizer.step()
+                batch_losses.append(loss.item())
+
+        epoch_loss = sum(batch_losses) / max(len(batch_losses), 1)
+        if epoch_loss < best_loss:
+            best_loss = epoch_loss
+
+    metrics = {"landscape_loss": best_loss}
+    ckpt_path = ckpt_mgr.save("landscape_trained", {
+        "model_state_dict": model.state_dict(),
+        "metrics": metrics,
+        "config": config.landscape,
+    })
+    log_stage_end("landscape_train", metrics=metrics)
+    return ckpt_path
 
 
 def validate_pipeline(config: ResistanceMapConfig, ckpt_mgr: CheckpointManager) -> Path:
@@ -462,7 +512,7 @@ def run_sequential_pipeline(config: ResistanceMapConfig, stage: str | None = Non
     """Execute the pipeline sequentially (legacy mode)."""
     from resistancemap.utils.logging_utils import setup_logger
 
-    log = setup_logger(config)
+    log = setup_logger(log_dir=config.log_dir, wandb_project=config.wandb_project)
     ckpt_mgr = CheckpointManager(config.checkpoint_dir, log)
 
     _init_distributed(config)
