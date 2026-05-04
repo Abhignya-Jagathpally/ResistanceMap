@@ -121,13 +121,13 @@ class CheckpointManager:
                 f"Run the '{stage_name}' stage first."
             )
 
-        data = torch.load(ckpt_path, map_location=map_location, weights_only=False)
+        state = torch.load(ckpt_path, map_location=map_location, weights_only=False)
         self.logger.info(
             f"Checkpoint loaded: {ckpt_path} "
-            f"(saved {data.get('_metadata', {}).get('timestamp', 'unknown')})"
+            f"(saved {state.get('_metadata', {}).get('timestamp', 'unknown')})"
         )
 
-        return data
+        return state
 
     def get_latest_completed_stage(self, stage_names: list[str]) -> str | None:
         """Find the most recently completed pipeline stage.

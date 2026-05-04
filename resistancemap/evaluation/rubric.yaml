@@ -1,0 +1,213 @@
+# ResistanceMap evaluation rubric
+# ----------------------------------------------------------------------
+# Schema:
+#   <tier>:
+#     <agent_key>:
+#       <criterion>:
+#         weight: float in [0, 1]
+#         evidence_type: one of {file, metric, schema, document, hash, todo}
+#         description: short human-readable note
+#         required: bool  (if true, missing evidence -> FAIL not CONDITIONAL)
+#
+# Weights are interpreted *within* an agent: they should sum to ~1.0 per
+# agent. Tier-level weighting is handled by the orchestrator, not here.
+# ----------------------------------------------------------------------
+
+tier_a:
+  data_adequacy:
+    indication_match:
+      weight: 0.20
+      evidence_type: schema
+      required: true
+      description: >
+        Configured datasets are MM-relevant (CCLE MM cell lines, MMRF
+        CoMMpass, MM scRNA cohorts). Hard-fails if the cohort is AML or
+        lymphoma in disguise.
+    treatment_line_documented:
+      weight: 0.10
+      evidence_type: document
+      required: false
+      description: Treatment line metadata present per patient (NDMM vs RRMM).
+    sample_site_documented:
+      weight: 0.10
+      evidence_type: document
+      required: false
+      description: Bone marrow vs peripheral blood site recorded.
+    modality_alignment:
+      weight: 0.15
+      evidence_type: schema
+      required: true
+      description: Single-cell vs bulk samples are aligned at the patient level.
+    longitudinal_availability:
+      weight: 0.15
+      evidence_type: schema
+      required: false
+      description: At least one cohort has pre/post-treatment timepoints.
+    resistance_label_definition:
+      weight: 0.20
+      evidence_type: document
+      required: true
+      description: Primary vs secondary resistance label provenance documented.
+    temporal_leakage_clean:
+      weight: 0.10
+      evidence_type: metric
+      required: true
+      description: leakage.audit_patient_split + detect_temporal_leakage clean.
+
+  measurement_integration:
+    cell_type_resolution:
+      weight: 0.20
+      evidence_type: schema
+      required: true
+      description: Cell-type vs cell-state resolution declared and consistent.
+    batch_effects_assessed:
+      weight: 0.20
+      evidence_type: metric
+      required: true
+      description: kBET / iLISI or equivalent batch-mixing metric reported.
+    cross_modality_alignment:
+      weight: 0.20
+      evidence_type: metric
+      required: true
+      description: >
+        Same-cell vs imputed-bridge alignment between proteome / epigenome /
+        transcriptome is documented and error-bounded.
+    ppi_graph_version:
+      weight: 0.15
+      evidence_type: document
+      required: true
+      description: STRING version, ppi_confidence cutoff, edge count recorded.
+    drug_target_coverage:
+      weight: 0.25
+      evidence_type: metric
+      required: true
+      description: >
+        Surface targets of config.data.target_drugs (e.g. CD38, SLAMF7,
+        BCMA) are present in the PPI graph.
+
+  bias_fairness_shift:
+    selection_bias_audit:
+      weight: 0.25
+      evidence_type: document
+      required: true
+      description: Public-dataset selection bias (cell line ancestry, MMRF enrolment criteria) documented.
+    ancestry_representation:
+      weight: 0.25
+      evidence_type: metric
+      required: true
+      description: Self-reported ancestry distribution per cohort.
+    ses_proxy_handling:
+      weight: 0.10
+      evidence_type: document
+      required: false
+      description: SES proxies (insurance, geography) handled or explicitly excluded.
+    train_deploy_shift:
+      weight: 0.25
+      evidence_type: metric
+      required: true
+      description: >
+        Train -> deploy domain shift score (defers to metrics/shift.py once
+        available; until then a TODO evidence stub is recorded).
+    subgroup_calibration:
+      weight: 0.15
+      evidence_type: metric
+      required: false
+      description: Calibration is reported per subgroup, not just overall.
+
+tier_b:
+  architecture:
+    inductive_bias_justified:
+      weight: 0.30
+      evidence_type: document
+      required: true
+      description: VAE / GNN / ODE inductive biases justified against the claim set.
+    capacity_vs_data:
+      weight: 0.30
+      evidence_type: metric
+      required: true
+      description: Parameter count is appropriate for n_samples available.
+    ablation_completeness:
+      weight: 0.40
+      evidence_type: metric
+      required: true
+      description: Each architectural component has an ablation result.
+
+  baseline_adversary:
+    naive_baselines:
+      weight: 0.30
+      evidence_type: metric
+      required: true
+      description: Class-prevalence, last-observation, and KM baselines reported.
+    strong_baselines:
+      weight: 0.40
+      evidence_type: metric
+      required: true
+      description: DeepSurv / DeepCDR / scVI-style baselines reported.
+    leakage_check_on_baselines:
+      weight: 0.30
+      evidence_type: metric
+      required: true
+      description: Baselines were given the same splits / preprocessing.
+
+tier_c:
+  forecasting:
+    calibration_at_horizon:
+      weight: 0.30
+      evidence_type: metric
+      required: true
+      description: ECE / Brier at each horizon in trajectory.forecast_horizons.
+    concordance_vs_baseline:
+      weight: 0.30
+      evidence_type: metric
+      required: true
+      description: Harrell's / Uno's C above documented baseline.
+    pinball_loss_at_horizon:
+      weight: 0.20
+      evidence_type: metric
+      required: true
+      description: Pinball / CRPS at each horizon.
+    censoring_policy:
+      weight: 0.20
+      evidence_type: document
+      required: true
+      description: Minimum-followup and censoring rule documented.
+
+  falsification:
+    temporal_leakage_scan:
+      weight: 0.30
+      evidence_type: metric
+      required: true
+      description: leakage.detect_temporal_leakage clean on all splits.
+    perturbation_stability:
+      weight: 0.30
+      evidence_type: metric
+      required: true
+      description: Attribution rank correlation under input perturbation.
+    pathway_holdout:
+      weight: 0.40
+      evidence_type: metric
+      required: true
+      description: Held-out-pathway generalisation result.
+
+tier_d:
+  governance_chair:
+    charter_compliance:
+      weight: 0.30
+      evidence_type: document
+      required: true
+      description: Every claim made by the pipeline is in the charter.
+    audit_trail_complete:
+      weight: 0.30
+      evidence_type: hash
+      required: true
+      description: Verification chain hashes line up across all findings.
+    required_changes_tracked:
+      weight: 0.20
+      evidence_type: document
+      required: true
+      description: Aggregated required_changes list from all tiers.
+    trl_grade_assigned:
+      weight: 0.20
+      evidence_type: document
+      required: true
+      description: TRL-style maturity grade assigned with justification.

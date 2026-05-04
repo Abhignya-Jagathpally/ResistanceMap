@@ -30,6 +30,19 @@ class DataConfig:
     scrna_gse271107_path: Path = Path("data/raw/gse271107.h5ad")  # Lenalidomide response
     mmrf_commpass_dir: Path = Path("data/raw/mmrf_commpass/")  # Clinical + genomic data
 
+    # Pre-aggregated scRNA pseudobulk (per-(sample, disease_stage)).
+    # Built by scripts/build_scrna_summary.py. When present, harmonize_omics
+    # attaches it to MultiOmicsDataset as a longitudinal HD/MGUS/SMM/MM axis.
+    scrna_summary_path: Path = Path("checkpoints/scrna_summary.pt")
+
+    # Tier-2 baseline datasets used by similar models. Optional — pipeline
+    # degrades gracefully when absent. See docs/DATASETS_AND_BENCHMARKS.md
+    # for the strategic rationale (DrugCell/MOLI/PaccMann use CRISPR + PRISM
+    # alongside CCLE proteomics; HMCL is the MM-specific cell-line cohort).
+    depmap_crispr_path: Path = Path("data/raw/depmap/CRISPRGeneEffect.csv")
+    hmcl_keats_dir: Path = Path("data/raw/hmcl_keats/")
+    prism_path: Path = Path("data/raw/prism/secondary-screen-dose-response-curve-parameters.csv")
+
     # Preprocessing
     min_coverage: float = 0.7  # Drop proteins missing in >30% of samples
     imputation: str = "knn"  # knn | median | zero
@@ -47,10 +60,14 @@ class DataConfig:
     val_fraction: float = 0.15
     random_seed: int = 42
 
-    # Drug targets for trajectory modeling
+    # Drug targets for trajectory modeling.
+    # Restricted to MM-relevant compounds that exist in the GDSC cell-line
+    # screen; see configs/default.yaml for the rationale and the standard-
+    # of-care drugs that intentionally cannot live here.
     target_drugs: list[str] = field(default_factory=lambda: [
-        "Bortezomib", "Lenalidomide", "Dexamethasone",
-        "Carfilzomib", "Pomalidomide", "Daratumumab",
+        "Bortezomib", "Lenalidomide", "Panobinostat", "Vorinostat",
+        "Romidepsin", "Venetoclax", "Dinaciclib", "Palbociclib",
+        "Doxorubicin", "Etoposide", "Cyclophosphamide",
     ])
 
 
@@ -94,6 +111,16 @@ class VAEConfig:
     patience: int = 20
     min_delta: float = 1e-4
 
+    # Domain-adversarial training (Agent 2 §2.4)
+    conditioning_dim: int = 0  # FiLM conditioning dim (0 = disabled)
+    domain_adversarial: bool = False
+    adversarial_weight: float = 0.1
+    adversarial_warmup_epochs: int = 10
+
+    # Cross-modal VAE enhancements
+    use_stochastic_decoder: bool = False  # Use stochastic decoder for uncertainty quantification
+    expanded_latent_dim: Optional[int] = None  # Override latent_dim (e.g., 128, 256) to reduce bottleneck
+
 
 @dataclass
 class TrajectoryConfig:
@@ -119,6 +146,27 @@ class TrajectoryConfig:
     # Output range
     score_range: tuple[float, float] = (0.0, 1.0)
 
+    # Chromatin reader/writer proteins for ODE parameterization
+    reader_writer_proteins: list[str] = field(default_factory=lambda: [
+        "EZH2", "KDM6A", "KDM6B", "KMT2A", "KMT2D",
+        "DNMT1", "DNMT3A", "DNMT3B", "TET1", "TET2",
+        "HDAC1", "HDAC2", "KAT2A", "KAT2B", "EP300",
+        "BRD4", "SMARCA4", "ARID1A", "SUZ12", "EED",
+    ])
+
+    # Neural Jump-SDE (Agent 4 §4.1-4.7)
+    use_sde: bool = False
+    sde_drift_hidden: int = 128
+    sde_diffusion_hidden: int = 64
+    sde_jump_hidden: int = 64
+    sde_dt: float = 0.01
+    sde_n_mc_samples: int = 50
+    survival_calibrate: bool = False
+
+
+# Alias for backward compatibility with trajectory module
+StabilityConfig = TrajectoryConfig
+
 
 @dataclass
 class ProteinNetConfig:
@@ -139,6 +187,32 @@ class ProteinNetConfig:
     ppi_proteins: int = 7853  # Typical STRING human network size
     ppi_edges: int = 460000  # Typical edge count
 
+    # Anti-over-smoothing (Agent 2 §2.3, Agent 5 §5.1-5.8)
+    dropedge_rate: float = 0.1
+    use_pairnorm: bool = True
+    use_jumping_knowledge: bool = True
+    jk_mode: str = "cat"  # cat | max | lstm
+    use_graphmask: bool = False
+    graphmask_sparsity_weight: float = 0.01
+
+    # ESM-2 bottleneck (Agent 5 §5.2)
+    esm2_bottleneck_dim: int = 256
+
+    # Drug-conditioned attention (Agent 5 §5.3)
+    drug_embedding_dim: int = 0  # 0 = disabled
+    n_drug_types: int = 11
+
+    # Evidential classification (Agent 5 §5.6)
+    use_evidential_head: bool = False
+    evidential_n_classes: int = 3
+
+    # Phosphoproteomics (Agent 5 §5.4)
+    phospho_dim: int = 0  # 0 = disabled
+
+    # STRING debiasing (Agent 5 §5.7)
+    string_debias_textmining: bool = True
+    string_debias_threshold: float = 0.7
+
 
 @dataclass
 class FusionConfig:
@@ -155,6 +229,14 @@ class FusionConfig:
     fusion_epochs: int = 150
     weight_decay: float = 1e-4
 
+    # Batch correction (Agent 2 §2.4, Agent 3 §3.3)
+    batch_correction: bool = False
+    n_batches: int = 10
+    batch_embed_dim: int = 16
+
+    # Missing modality handling (Agent 3 §3.3)
+    handle_missing_modalities: bool = True
+
 
 @dataclass
 class LandscapeConfig:
@@ -168,6 +250,9 @@ class LandscapeConfig:
     visualization: bool = True
     umap_n_neighbors: int = 15
     umap_min_dist: float = 0.1
+
+    # Evidential landscape (Agent 6 §6.4)
+    use_evidential: bool = False
 
 
 @dataclass
@@ -202,6 +287,40 @@ class HardwareConfig:
 
 
 @dataclass
+class EvaluationConfig:
+    """Evaluation governance layer settings.
+
+    These flags only affect the orthogonal evaluation governance layer
+    under :mod:`resistancemap.evaluation`; they have no effect on the
+    training DAG. The training pipeline runs unchanged regardless of how
+    these are set.
+    """
+
+    enabled: bool = True
+
+    # Audit trail destination (one subdirectory per run_id).
+    log_root: Path = Path("logs/evaluation")
+
+    # Optional explicit run identifier; defaults to a UTC timestamp.
+    run_id: Optional[str] = None
+
+    # Rubric source. None falls back to the default rubric.yaml shipped
+    # with the evaluation package.
+    rubric_path: Optional[Path] = None
+
+    # Tier gating: a Tier A FAIL always hard-stops downstream tiers. Set
+    # to False to *demote* a Tier A FAIL into a CONDITIONAL warning
+    # (intended only for offline rubric debugging — never for releases).
+    tier_a_hard_stop: bool = True
+
+    # Tier opt-outs (use to skip tiers when the necessary intake is not
+    # yet available; the chair downgrades the report accordingly).
+    skip_tier_b: bool = False
+    skip_tier_c: bool = False
+    skip_tier_d: bool = False
+
+
+@dataclass
 class ResistanceMapConfig:
     """Top-level configuration container."""
 
@@ -213,6 +332,7 @@ class ResistanceMapConfig:
     landscape: LandscapeConfig = field(default_factory=LandscapeConfig)
     api: APIConfig = field(default_factory=APIConfig)
     hardware: HardwareConfig = field(default_factory=HardwareConfig)
+    evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
 
     checkpoint_dir: Path = Path("checkpoints")
     log_dir: Path = Path("logs")
@@ -267,16 +387,24 @@ def load_config(path: Path) -> ResistanceMapConfig:
         "landscape": (config.landscape, LandscapeConfig),
         "api": (config.api, APIConfig),
         "hardware": (config.hardware, HardwareConfig),
+        "evaluation": (config.evaluation, EvaluationConfig),
     }
 
     for section_name, (section_obj, section_cls) in section_map.items():
         if section_name in raw:
             for key, value in raw[section_name].items():
                 if hasattr(section_obj, key):
-                    # Convert string paths to Path objects
+                    # Convert string paths to Path objects. Note: with
+                    # `from __future__ import annotations`, dataclass field
+                    # types are strings, so compare by name.
                     field_type = section_cls.__dataclass_fields__[key].type
-                    if field_type == Path or field_type == "Path":
+                    type_name = field_type if isinstance(field_type, str) else getattr(field_type, "__name__", str(field_type))
+                    if (type_name == "Path" or "Path" in type_name) and value is not None:
                         value = Path(value)
+                    elif type_name == "float" and isinstance(value, str):
+                        value = float(value)
+                    elif type_name == "int" and isinstance(value, str):
+                        value = int(value)
                     setattr(section_obj, key, value)
 
     # Top-level fields

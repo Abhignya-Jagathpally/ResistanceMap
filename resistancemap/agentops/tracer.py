@@ -443,7 +443,14 @@ class Tracer:
                 else:
                     raise ValueError("No active trace found. Start a trace first.")
 
-        span = self.start_span(trace_id, agent_name, operation)
+        # Get current active span as parent
+        parent_id = None
+        with self._thread_lock:
+            thread_id = threading.get_ident()
+            if thread_id in self._span_stack and self._span_stack[thread_id]:
+                parent_id = self._span_stack[thread_id][-1]
+
+        span = self.start_span(trace_id, agent_name, operation, parent_span_id=parent_id)
         try:
             yield span
             self.end_span(span.span_id, status="completed")

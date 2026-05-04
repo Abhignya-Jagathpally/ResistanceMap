@@ -156,13 +156,38 @@ class Orchestrator:
         _timing_log: Dict of agent_name -> (start_time, end_time)
     """
 
-    def __init__(self):
-        """Initialize orchestrator."""
+    def __init__(
+        self,
+        tracer: Any | None = None,
+        evaluator: Any | None = None,
+        optimizer: Any | None = None,
+        guardrails: Any | None = None,
+    ):
+        """Initialize orchestrator.
+
+        Args:
+            tracer:    optional ``agentops.Tracer`` to emit spans.
+            evaluator: optional ``agentops.Evaluator`` to record task results
+                       and guardrail violations.
+            optimizer: optional ``agentops.Optimizer`` (handoff timing).
+            guardrails: optional ``verification.GuardrailEngine``.
+
+        v7: previously these were constructed in ``main.run_agentic_pipeline``
+        but never injected here, so the dashboard always reported 0 traces. They
+        are now optional kwargs; when supplied, every agent execution emits a
+        span and every successful output is run through ``GuardrailEngine.check_all``.
+        """
         self.dag = AgentDAG()
         self.results: dict[str, AgentResult] = {}
         self.execution_plan: ExecutionPlan | None = None
         self._verification_chain: list[str] = []
         self._timing_log: dict[str, tuple[float, float]] = {}
+        self._tracer = tracer
+        self._evaluator = evaluator
+        self._optimizer = optimizer
+        self._guardrails = guardrails
+        self._trace_id: str | None = None
+        self._guardrail_violations: list[dict[str, Any]] = []
 
     def add_agent(self, agent: BaseAgent) -> None:
         """Register an agent with the orchestrator.
@@ -220,6 +245,15 @@ class Orchestrator:
             f"in {len(self.execution_plan.layers)} layers"
         )
 
+        if self._tracer is not None:
+            try:
+                trace = self._tracer.start_trace()
+                self._trace_id = trace.trace_id
+                logger.info(f"Orchestrator: trace_id={self._trace_id}")
+            except Exception:
+                logger.exception("Orchestrator: failed to start trace; continuing without tracing")
+                self._trace_id = None
+
         try:
             # Execute each layer
             for layer_idx, layer in enumerate(self.execution_plan.layers):
@@ -263,6 +297,12 @@ class Orchestrator:
             f"Completed: {sum(1 for r in self.results.values() if r.status == AgentState.COMPLETED)}/{len(self.dag.agents)}"
         )
 
+        if self._tracer is not None and self._trace_id is not None:
+            try:
+                self._tracer.end_trace(self._trace_id)
+            except Exception:
+                logger.debug("Orchestrator: failed to end trace cleanly")
+
         return self.results
 
     async def _run_agent_isolated(
@@ -285,6 +325,20 @@ class Orchestrator:
             AgentResult
         """
         start_time = time.time()
+
+        # v7: AgentOps span emission. Construct upfront so the `finally` block
+        # can close it regardless of execution path.
+        span = None
+        if self._tracer is not None and self._trace_id is not None:
+            try:
+                span = self._tracer.start_span(
+                    trace_id=self._trace_id,
+                    agent_name=agent_name,
+                    operation="agent.execute",
+                )
+            except Exception:
+                logger.debug(f"_run_agent_isolated({agent_name}): start_span failed")
+                span = None
 
         try:
             # Prepare inputs from dependencies
@@ -319,6 +373,65 @@ class Orchestrator:
             # Record timing
             self._timing_log[agent_name] = (start_time, time.time())
 
+            # v7: GuardrailEngine pass on the agent's output. We feed the
+            # output dict in flat form; rules that aren't applicable simply
+            # PASS with severity=info. Any non-passing 'error'-severity rule
+            # is recorded as a violation, but does NOT fail the agent (so we
+            # surface them in the dashboard rather than silently halt). The
+            # user can promote any rule to a hard stop later.
+            if (
+                self._guardrails is not None
+                and result.status == AgentState.COMPLETED
+                and isinstance(result.output, dict)
+            ):
+                try:
+                    rule_results = self._guardrails.check_all(result.output)
+                    for r in rule_results:
+                        if not r["passed"]:
+                            v = {
+                                "agent": agent_name,
+                                "rule": r["guardrail"],
+                                "severity": r["severity"],
+                                "details": r.get("details", ""),
+                            }
+                            self._guardrail_violations.append(v)
+                            if self._evaluator is not None:
+                                try:
+                                    self._evaluator.record_guardrail_violation(
+                                        agent_name=agent_name,
+                                        violation_type=r["guardrail"],
+                                        severity=r["severity"],
+                                        description=r.get("details", ""),
+                                        input_hash=result.verification_hash,
+                                    )
+                                except Exception:
+                                    logger.debug("guardrail eval record failed")
+                    # attach summary on result.metadata so it's persisted
+                    result.metadata = {
+                        **(result.metadata or {}),
+                        "guardrails_checked": len(rule_results),
+                        "guardrails_failed": sum(1 for r in rule_results if not r["passed"]),
+                    }
+                except Exception:
+                    logger.exception(
+                        f"_run_agent_isolated({agent_name}): guardrail engine raised"
+                    )
+
+            # v7: AgentOps evaluator records the task outcome.
+            if self._evaluator is not None:
+                try:
+                    self._evaluator.record_task_result(
+                        task_id=agent_name,
+                        status=result.status.value,
+                        verified=(result.status == AgentState.COMPLETED),
+                        metadata={
+                            "verification_hash": result.verification_hash,
+                            "elapsed_s": time.time() - start_time,
+                        },
+                    )
+                except Exception:
+                    logger.debug("evaluator.record_task_result failed")
+
             return result
 
         except Exception as e:
@@ -328,6 +441,19 @@ class Orchestrator:
                 AgentState.FAILED,
                 error=f"Unexpected error: {str(e)}",
             )
+        finally:
+            if span is not None and self._tracer is not None:
+                try:
+                    self._tracer.end_span(
+                        span_id=span.span_id,
+                        status="completed" if (
+                            agent_name in self.results
+                            and self.results[agent_name].status == AgentState.COMPLETED
+                        ) else "running",
+                        metadata={"elapsed_s": time.time() - start_time},
+                    )
+                except Exception:
+                    logger.debug("end_span failed")
 
     def get_execution_plan(self) -> list[list[str]]:
         """Get the execution plan (agents grouped by parallelizable layers).
